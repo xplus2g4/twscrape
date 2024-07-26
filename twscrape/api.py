@@ -112,12 +112,50 @@ class API:
                 params = {"variables": kv, "features": ft}
                 if cur is not None:
                     params["variables"]["cursor"] = cur
-                if queue in ("SearchTimeline", "ListLatestTweetsTimeline"):
+                if queue in ("SearchTimeline"):
                     params["fieldToggles"] = {"withArticleRichContentState": False}
                 if queue in ("UserMedia",):
                     params["fieldToggles"] = {"withArticlePlainText": False}
 
                 rep = await client.get(f"{GQL_URL}/{op}", params=encode_params(params))
+                if rep is None:
+                    return
+
+                obj = rep.json()
+                els = get_by_path(obj, "entries") or []
+                els = [
+                    x
+                    for x in els
+                    if not (
+                        x["entryId"].startswith("cursor-")
+                        or x["entryId"].startswith("messageprompt-")
+                    )
+                ]
+                cur = self._get_cursor(obj, cursor_type)
+
+                rep, cnt, active = self._is_end(rep, queue, els, cur, cnt, limit)
+                if rep is None:
+                    return
+
+                yield rep
+
+    async def _gql_post_items(
+        self, op: str, kv: dict, ft: dict | None = None, limit=-1, cursor_type="Bottom"
+    ):
+        queue, cur, cnt, active = op.split("/")[-1], None, 0, True
+        kv, ft = {**kv}, {**GQL_FEATURES, **(ft or {})}
+
+        async with QueueClient(self.pool, queue, self.debug, proxy=self.proxy) as client:
+            while active:
+                params = {"variables": kv, "features": ft}
+                if cur is not None:
+                    params["variables"]["cursor"] = cur
+                if queue in ("SearchTimeline"):
+                    params["fieldToggles"] = {"withArticleRichContentState": False}
+                if queue in ("UserMedia",):
+                    params["fieldToggles"] = {"withArticlePlainText": False}
+
+                rep = await client.post(f"{GQL_URL}/{op}", params=encode_params(params))
                 if rep is None:
                     return
 
@@ -145,6 +183,13 @@ class API:
         async with QueueClient(self.pool, queue, self.debug, proxy=self.proxy) as client:
             params = {"variables": {**kv}, "features": {**GQL_FEATURES, **ft}}
             return await client.get(f"{GQL_URL}/{op}", params=encode_params(params))
+
+    async def _gql_post_item(self, op: str, kv: dict, ft: dict | None = None):
+        ft = ft or {}
+        queue = op.split("/")[-1]
+        async with QueueClient(self.pool, queue, self.debug, proxy=self.proxy) as client:
+            params = {"variables": {**kv}, "features": {**GQL_FEATURES, **ft}}
+            return await client.post(f"{GQL_URL}/{op}", params=encode_params(params))
 
     # search
 
